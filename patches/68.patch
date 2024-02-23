@@ -1,0 +1,88 @@
+From 647523d74c6e4d0601f3778e5914cc6769f3d50e Mon Sep 17 00:00:00 2001
+From: Zia Ur Rehman <me@zia.im>
+Date: Tue, 3 Dec 2019 12:44:58 -0500
+Subject: [PATCH 1/2] Use default config file if exists
+
+---
+ main.go | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/main.go b/main.go
+index 3100561..c3d8f0c 100644
+--- a/main.go
++++ b/main.go
+@@ -14,7 +14,10 @@ import (
+ 	flag "github.com/ogier/pflag"
+ )
+ 
+-const defaultSubSymbol = "{}"
++const (
++	defaultSubSymbol  = "{}"
++	defaultConfigFile = "reflex.conf"
++)
+ 
+ var (
+ 	reflexes []*Reflex
+@@ -138,6 +141,16 @@ func main() {
+ 	}
+ 
+ 	var configs []*Config
++	if flagConf == "" {
++		if _, err := os.Stat(defaultConfigFile); err != nil {
++			if !os.IsNotExist(err) {
++				log.Fatalf("Could not read %s: %v.", defaultConfigFile, err)
++			}
++		} else {
++			flagConf = defaultConfigFile
++		}
++	}
++
+ 	if flagConf == "" {
+ 		if flagSequential {
+ 			log.Fatal("Cannot set --sequential without --config (because you cannot specify multiple commands).")
+@@ -145,7 +158,10 @@ func main() {
+ 		configs = []*Config{globalConfig}
+ 	} else {
+ 		if anyNonGlobalsRegistered() {
+-			log.Fatal("Cannot set other flags along with --config other than --sequential, --verbose, and --decoration.")
++			log.Fatalf(
++				"Cannot set other flags other than --sequential, --verbose, and --decoration, when --config is specified or %s exists.",
++				defaultConfigFile,
++			)
+ 		}
+ 		var err error
+ 		configs, err = ReadConfigs(flagConf)
+
+From 27078cb61d375b36283c4391f1c9a9bab1a8b16f Mon Sep 17 00:00:00 2001
+From: Zia Ur Rehman <me@zia.im>
+Date: Tue, 3 Dec 2019 13:05:05 -0500
+Subject: [PATCH 2/2] Update documentation: default config file
+
+---
+ README.md | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index ebc93db..f13a009 100644
+--- a/README.md
++++ b/README.md
+@@ -33,7 +33,7 @@ with the filename of the changed file. (The symbol may be changed with the
+ OPTIONS are given below:
+       --all=false:
+             Include normally ignored files (VCS and editor special files).
+-  -c, --config="":
++  -c, --config="reflex.conf":
+             A configuration file that describes how to run reflex
+             (or '-' to read the configuration from stdin).
+   -d, --decoration="plain":
+@@ -136,6 +136,10 @@ also build SCSS and Coffeescript when those change as well. Instead of running
+ multiple reflex instances, which is cumbersome (and inefficient), you can give
+ reflex a configuration file.
+ 
++If a configuration file is not specified, and a file named `reflex.conf` exists
++in the current directory, reflex automatically picks that file as the default
++configuration file.
++
+ The configuration file syntax is simple: each line is a command, and each
+ command is composed of flags and arguments -- just like calling reflex but
+ without the initial `reflex`. Lines that start with `#` are ignored. Commands

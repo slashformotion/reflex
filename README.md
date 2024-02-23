@@ -40,6 +40,7 @@ OPTIONS are given below:
   -c, --config="":
             A configuration file that describes how to run reflex
             (or '-' to read the configuration from stdin).
+            Default: reflex.conf – if it exists in current working directory.
   -d, --decoration="plain":
             How to decorate command output. Choices: none, plain, fancy.
   -g, --glob=[]:
@@ -139,6 +140,10 @@ applications I often want to rebuild/rerun the server when my code changes, but
 also build SCSS and Coffeescript when those change as well. Instead of running
 multiple reflex instances, which is cumbersome (and inefficient), you can give
 reflex a configuration file.
+
+If a configuration file is not specified, and a file named `reflex.conf` exists
+in the current directory, reflex automatically picks that file as the default
+configuration file.
 
 The configuration file syntax is simple: each line is a command, and each
 command is composed of flags and arguments -- just like calling reflex but
