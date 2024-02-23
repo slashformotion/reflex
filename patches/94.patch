@@ -1,0 +1,237 @@
+From 8ceb8cb7ccfaacc75e8d1ca57bd6346b3d905160 Mon Sep 17 00:00:00 2001
+From: Vladimir Garvardt <vgarvardt@gmail.com>
+Date: Tue, 3 Jan 2023 14:51:56 +0100
+Subject: [PATCH 1/2] feat: set command name explicitly and use it instead of
+ the sequence number
+
+---
+ config.go |  3 +++
+ print.go  | 17 ++++++++++-------
+ reflex.go | 32 +++++++++++++++++---------------
+ watch.go  |  2 +-
+ 4 files changed, 31 insertions(+), 23 deletions(-)
+
+diff --git a/config.go b/config.go
+index 6ca3097..7c7b0c2 100644
+--- a/config.go
++++ b/config.go
+@@ -26,6 +26,7 @@ type Config struct {
+ 	onlyFiles       bool
+ 	onlyDirs        bool
+ 	allFiles        bool
++	name            string
+ }
+ 
+ func (c *Config) registerFlags(f *flag.FlagSet) {
+@@ -53,6 +54,8 @@ func (c *Config) registerFlags(f *flag.FlagSet) {
+             Only match directories (not files).`)
+ 	f.BoolVar(&c.allFiles, "all", false, `
+             Include normally ignored files (VCS and editor special files).`)
++	f.StringVar(&c.name, "name", "", `
++			Use fixed name for the command instead of the sequence number.`)
+ }
+ 
+ // ReadConfigs reads configurations from either a file or, as a special case,
+diff --git a/print.go b/print.go
+index 2529de4..8c0ea8b 100644
+--- a/print.go
++++ b/print.go
+@@ -22,15 +22,16 @@ const (
+ )
+ 
+ type OutMsg struct {
+-	reflexID int
+-	msg      string
++	reflexID   int
++	reflexName string
++	msg        string
+ }
+ 
+-func infoPrintln(id int, args ...interface{}) {
+-	stdout <- OutMsg{id, strings.TrimSpace(fmt.Sprintln(args...))}
++func infoPrintln(id int, name string, args ...interface{}) {
++	stdout <- OutMsg{id, name, strings.TrimSpace(fmt.Sprintln(args...))}
+ }
+-func infoPrintf(id int, format string, args ...interface{}) {
+-	stdout <- OutMsg{id, fmt.Sprintf(format, args...)}
++func infoPrintf(id int, name string, format string, args ...interface{}) {
++	stdout <- OutMsg{id, name, fmt.Sprintf(format, args...)}
+ }
+ 
+ func printMsg(msg OutMsg, writer io.Writer) {
+@@ -38,8 +39,10 @@ func printMsg(msg OutMsg, writer io.Writer) {
+ 	if decoration == DecorationFancy || decoration == DecorationPlain {
+ 		if msg.reflexID < 0 {
+ 			tag = "[info]"
+-		} else {
++		} else if msg.reflexName == "" {
+ 			tag = fmt.Sprintf("[%02d]", msg.reflexID)
++		} else {
++			tag = fmt.Sprintf("[%s]", msg.reflexName)
+ 		}
+ 	}
+ 
+diff --git a/reflex.go b/reflex.go
+index 528cca5..f6060e2 100644
+--- a/reflex.go
++++ b/reflex.go
+@@ -19,6 +19,7 @@ import (
+ // A Reflex is a single watch + command to execute.
+ type Reflex struct {
+ 	id           int
++	name         string
+ 	source       string // Describes what config/line defines this Reflex
+ 	startService bool
+ 	backlog      Backlog
+@@ -84,6 +85,7 @@ func NewReflex(c *Config) (*Reflex, error) {
+ 
+ 	reflex := &Reflex{
+ 		id:           reflexID,
++		name:         c.name,
+ 		source:       c.source,
+ 		startService: c.startService,
+ 		backlog:      backlog,
+@@ -148,11 +150,11 @@ func (r *Reflex) filterMatching(out chan<- string, in <-chan string) {
+ 
+ // batch receives file notification events and batches them up. It's a bit
+ // tricky, but here's what it accomplishes:
+-// * When we initially get a message, wait a bit and batch messages before
+-//   trying to send anything. This is because the file events come in bursts.
+-// * Once it's time to send, don't do it until the out channel is unblocked.
+-//   In the meantime, keep batching. When we've sent off all the batched
+-//   messages, go back to the beginning.
++//   - When we initially get a message, wait a bit and batch messages before
++//     trying to send anything. This is because the file events come in bursts.
++//   - Once it's time to send, don't do it until the out channel is unblocked.
++//     In the meantime, keep batching. When we've sent off all the batched
++//     messages, go back to the beginning.
+ func (r *Reflex) batch(out chan<- string, in <-chan string) {
+ 
+ 	const silenceInterval = 300 * time.Millisecond
+@@ -192,10 +194,10 @@ func (r *Reflex) runEach(names <-chan string) {
+ 	for name := range names {
+ 		if r.startService {
+ 			if r.Running() {
+-				infoPrintln(r.id, "Killing service")
++				infoPrintln(r.id, r.name, "Killing service")
+ 				r.terminate()
+ 			}
+-			infoPrintln(r.id, "Starting service")
++			infoPrintln(r.id, r.name, "Starting service")
+ 			r.runCommand(name, stdout)
+ 		} else {
+ 			r.runCommand(name, stdout)
+@@ -224,16 +226,16 @@ func (r *Reflex) terminate() {
+ 			return
+ 		case <-timer.C:
+ 			if sig == syscall.SIGINT {
+-				infoPrintln(r.id, "Sending SIGINT signal...")
++				infoPrintln(r.id, r.name, "Sending SIGINT signal...")
+ 			} else {
+-				infoPrintln(r.id, "Sending SIGKILL signal...")
++				infoPrintln(r.id, r.name, "Sending SIGKILL signal...")
+ 			}
+ 
+ 			// Instead of killing the process, we want to kill its
+ 			// whole pgroup in order to clean up any children the
+ 			// process may have created.
+ 			if err := syscall.Kill(-1*r.cmd.Process.Pid, sig); err != nil {
+-				infoPrintln(r.id, "Error killing:", err)
++				infoPrintln(r.id, r.name, "Error killing:", err)
+ 				if err.(syscall.Errno) == syscall.ESRCH { // no such process
+ 					return
+ 				}
+@@ -269,7 +271,7 @@ func (r *Reflex) runCommand(name string, stdout chan<- OutMsg) {
+ 
+ 	tty, err := pty.Start(cmd)
+ 	if err != nil {
+-		infoPrintln(r.id, err)
++		infoPrintln(r.id, r.name, err)
+ 		return
+ 	}
+ 	r.tty = tty
+@@ -290,10 +292,10 @@ func (r *Reflex) runCommand(name string, stdout chan<- OutMsg) {
+ 		// Allow for lines up to 100 MB.
+ 		scanner.Buffer(nil, 100e6)
+ 		for scanner.Scan() {
+-			stdout <- OutMsg{r.id, scanner.Text()}
++			stdout <- OutMsg{r.id, r.name, scanner.Text()}
+ 		}
+ 		if err := scanner.Err(); errors.Is(err, bufio.ErrTooLong) {
+-			infoPrintln(r.id, "Error: subprocess emitted a line longer than 100 MB")
++			infoPrintln(r.id, r.name, "Error: subprocess emitted a line longer than 100 MB")
+ 		}
+ 		// Intentionally ignore other scanner errors. Unfortunately,
+ 		// the pty returns a read error when the child dies naturally,
+@@ -307,7 +309,7 @@ func (r *Reflex) runCommand(name string, stdout chan<- OutMsg) {
+ 	go func() {
+ 		err := cmd.Wait()
+ 		if !r.Killed() && err != nil {
+-			stdout <- OutMsg{r.id, fmt.Sprintf("(error exit: %s)", err)}
++			stdout <- OutMsg{r.id, r.name, fmt.Sprintf("(error exit: %s)", err)}
+ 		}
+ 		r.done <- struct{}{}
+ 
+@@ -328,7 +330,7 @@ func (r *Reflex) Start(changes <-chan string) {
+ 	go r.runEach(batched)
+ 	if r.startService {
+ 		// Easy hack to kick off the initial start.
+-		infoPrintln(r.id, "Starting service")
++		infoPrintln(r.id, r.name, "Starting service")
+ 		r.runCommand("", stdout)
+ 	}
+ }
+diff --git a/watch.go b/watch.go
+index f591a87..5df5bc5 100644
+--- a/watch.go
++++ b/watch.go
+@@ -23,7 +23,7 @@ func watch(root string, watcher *fsnotify.Watcher, names chan<- string, done cha
+ 		select {
+ 		case e := <-watcher.Events:
+ 			if verbose {
+-				infoPrintln(-1, "fsnotify event:", e)
++				infoPrintln(-1, "", "fsnotify event:", e)
+ 			}
+ 			stat, err := os.Stat(e.Name)
+ 			if err != nil {
+
+From d9068d5f938e7507340a432cca7e6b88b2036799 Mon Sep 17 00:00:00 2001
+From: Vladimir Garvardt <vgarvardt@gmail.com>
+Date: Thu, 5 Jan 2023 17:15:45 +0100
+Subject: [PATCH 2/2] fix: fixed infoPrintf calls
+
+---
+ watch.go | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/watch.go b/watch.go
+index 5df5bc5..5c4adae 100644
+--- a/watch.go
++++ b/watch.go
+@@ -16,7 +16,7 @@ const chmodMask fsnotify.Op = ^fsnotify.Op(0) ^ fsnotify.Chmod
+ // criteria of all reflexes can be ignored.
+ func watch(root string, watcher *fsnotify.Watcher, names chan<- string, done chan<- error, reflexes []*Reflex) {
+ 	if err := filepath.Walk(root, walker(watcher, reflexes)); err != nil {
+-		infoPrintf(-1, "Error while walking path %s: %s", root, err)
++		infoPrintf(-1, "", "Error while walking path %s: %s", root, err)
+ 	}
+ 
+ 	for {
+@@ -36,7 +36,7 @@ func watch(root string, watcher *fsnotify.Watcher, names chan<- string, done cha
+ 			names <- path
+ 			if e.Op&fsnotify.Create > 0 && stat.IsDir() {
+ 				if err := filepath.Walk(path, walker(watcher, reflexes)); err != nil {
+-					infoPrintf(-1, "Error while walking path %s: %s", path, err)
++					infoPrintf(-1, "", "Error while walking path %s: %s", path, err)
+ 				}
+ 			}
+ 			// TODO: Cannot currently remove fsnotify watches
+@@ -68,7 +68,7 @@ func walker(watcher *fsnotify.Watcher, reflexes []*Reflex) filepath.WalkFunc {
+ 			return filepath.SkipDir
+ 		}
+ 		if err := watcher.Add(path); err != nil {
+-			infoPrintf(-1, "Error while watching new path %s: %s", path, err)
++			infoPrintf(-1, "", "Error while watching new path %s: %s", path, err)
+ 		}
+ 		return nil
+ 	}
