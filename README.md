@@ -1,5 +1,7 @@
 # Reflex
 
+> This is a fork of Reflex that I keep for personal use. The patches applied can be found in the `patches/` folder. 
+
 Reflex is a small tool to watch a directory and rerun a command when certain
 files change. It's great for automatically running compile/lint/test tasks and
 for reloading your application when the code changes.
